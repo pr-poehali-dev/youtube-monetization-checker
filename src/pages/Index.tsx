@@ -4,31 +4,63 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import Icon from '@/components/ui/icon'
+import { youtubeAPI, type ChannelAnalysis } from '@/lib/youtube-api'
+import { YouTubeUrlValidator, InputSanitizer } from '@/lib/validators'
 
 const Index = () => {
   const [channelUrl, setChannelUrl] = useState('')
   const [isChecking, setIsChecking] = useState(false)
-  const [results, setResults] = useState(null)
+  const [results, setResults] = useState<ChannelAnalysis | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  const handleUrlChange = (value: string) => {
+    setChannelUrl(value)
+    setValidationError(null)
+    setError(null)
+    
+    if (value.trim()) {
+      const validation = YouTubeUrlValidator.validate(value)
+      if (!validation.isValid) {
+        setValidationError(validation.error || null)
+      }
+    }
+  }
 
   const handleCheck = async () => {
-    if (!channelUrl) return
+    if (!channelUrl.trim()) return
+    
+    // Валидация URL
+    const validation = YouTubeUrlValidator.validate(channelUrl)
+    if (!validation.isValid) {
+      setValidationError(validation.error || null)
+      return
+    }
+
+    // Проверка API ключа
+    if (!youtubeAPI.isConfigured()) {
+      setError('YouTube API не настроен. Добавьте VITE_YOUTUBE_API_KEY в переменные окружения.')
+      return
+    }
     
     setIsChecking(true)
-    // Имитация проверки
-    setTimeout(() => {
-      setResults({
-        channelName: 'Пример канала',
-        isMonetized: true,
-        subscribers: '125,000',
-        views: '2,500,000',
-        videoCount: 450,
-        adsEnabled: true,
-        membershipEnabled: true,
-        superChatEnabled: true
-      })
+    setError(null)
+    setResults(null)
+    
+    try {
+      const sanitizedUrl = InputSanitizer.sanitizeUrl(channelUrl)
+      const normalizedUrl = YouTubeUrlValidator.normalizeUrl(sanitizedUrl)
+      
+      const analysis = await youtubeAPI.analyzeChannel(normalizedUrl)
+      setResults(analysis)
+    } catch (err) {
+      console.error('Error checking channel:', err)
+      setError(err instanceof Error ? err.message : 'Произошла ошибка при проверке канала')
+    } finally {
       setIsChecking(false)
-    }, 2000)
+    }
   }
 
   return (
@@ -76,12 +108,12 @@ const Index = () => {
                 <Input
                   placeholder="https://www.youtube.com/c/channelname"
                   value={channelUrl}
-                  onChange={(e) => setChannelUrl(e.target.value)}
-                  className="flex-1"
+                  onChange={(e) => handleUrlChange(e.target.value)}
+                  className={`flex-1 ${validationError ? 'border-red-500' : ''}`}
                 />
                 <Button 
                   onClick={handleCheck}
-                  disabled={!channelUrl || isChecking}
+                  disabled={!channelUrl || isChecking || !!validationError}
                   className="bg-[#FF0000] hover:bg-[#CC0000] text-white px-8"
                 >
                   {isChecking ? (
@@ -91,6 +123,22 @@ const Index = () => {
                   )}
                 </Button>
               </div>
+              {validationError && (
+                <Alert className="border-red-200 bg-red-50">
+                  <Icon name="AlertCircle" size={16} className="text-red-500" />
+                  <AlertDescription className="text-red-700">
+                    {validationError}
+                  </AlertDescription>
+                </Alert>
+              )}
+              {error && (
+                <Alert className="border-red-200 bg-red-50">
+                  <Icon name="AlertCircle" size={16} className="text-red-500" />
+                  <AlertDescription className="text-red-700">
+                    {error}
+                  </AlertDescription>
+                </Alert>
+              )}
               <p className="text-sm text-gray-500 text-center">
                 Поддерживаются ссылки вида: youtube.com/c/name, youtube.com/@name, youtube.com/channel/ID
               </p>
@@ -118,21 +166,39 @@ const Index = () => {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div>
-                      <p className="font-semibold text-[#282828]">{results.channelName}</p>
+                    <div className="flex items-center space-x-3">
+                      {results.channel.thumbnail && (
+                        <img 
+                          src={results.channel.thumbnail} 
+                          alt={results.channel.title}
+                          className="w-16 h-16 rounded-full"
+                        />
+                      )}
+                      <div>
+                        <p className="font-semibold text-[#282828]">{results.channel.title}</p>
+                        {results.channel.customUrl && (
+                          <p className="text-sm text-gray-600">@{results.channel.customUrl}</p>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
                         <p className="text-gray-600">Подписчики</p>
-                        <p className="font-semibold">{results.subscribers}</p>
+                        <p className="font-semibold">{results.channel.subscriberCount}</p>
                       </div>
                       <div>
                         <p className="text-gray-600">Просмотры</p>
-                        <p className="font-semibold">{results.views}</p>
+                        <p className="font-semibold">{results.channel.viewCount}</p>
                       </div>
                       <div>
                         <p className="text-gray-600">Видео</p>
-                        <p className="font-semibold">{results.videoCount}</p>
+                        <p className="font-semibold">{results.channel.videoCount}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Проверено</p>
+                        <p className="font-semibold text-xs">
+                          {new Date(results.lastChecked).toLocaleString('ru-RU')}
+                        </p>
                       </div>
                     </div>
                   </CardContent>
@@ -149,10 +215,10 @@ const Index = () => {
                   <CardContent className="space-y-4">
                     <div className="flex items-center space-x-2">
                       <Badge 
-                        variant={results.isMonetized ? "default" : "destructive"}
-                        className={results.isMonetized ? "bg-green-500" : ""}
+                        variant={results.monetization.isMonetized ? "default" : "destructive"}
+                        className={results.monetization.isMonetized ? "bg-green-500" : ""}
                       >
-                        {results.isMonetized ? 'Монетизирован' : 'Не монетизирован'}
+                        {results.monetization.isMonetized ? 'Монетизирован' : 'Не монетизирован'}
                       </Badge>
                     </div>
                     
@@ -160,27 +226,33 @@ const Index = () => {
                       <div className="flex items-center justify-between">
                         <span className="text-sm">Реклама</span>
                         <Icon 
-                          name={results.adsEnabled ? "Check" : "X"} 
+                          name={results.monetization.adsEnabled ? "Check" : "X"} 
                           size={16} 
-                          className={results.adsEnabled ? "text-green-500" : "text-red-500"}
+                          className={results.monetization.adsEnabled ? "text-green-500" : "text-red-500"}
                         />
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm">Спонсорство</span>
                         <Icon 
-                          name={results.membershipEnabled ? "Check" : "X"} 
+                          name={results.monetization.membershipEnabled ? "Check" : "X"} 
                           size={16} 
-                          className={results.membershipEnabled ? "text-green-500" : "text-red-500"}
+                          className={results.monetization.membershipEnabled ? "text-green-500" : "text-red-500"}
                         />
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm">Супер чат</span>
                         <Icon 
-                          name={results.superChatEnabled ? "Check" : "X"} 
+                          name={results.monetization.superChatEnabled ? "Check" : "X"} 
                           size={16} 
-                          className={results.superChatEnabled ? "text-green-500" : "text-red-500"}
+                          className={results.monetization.superChatEnabled ? "text-green-500" : "text-red-500"}
                         />
                       </div>
+                      {results.monetization.estimatedRevenue && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm">Оценочный доход</span>
+                          <span className="text-sm font-semibold">{results.monetization.estimatedRevenue}</span>
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -204,12 +276,22 @@ const Index = () => {
                   Как работает проверка монетизации?
                 </AccordionTrigger>
                 <AccordionContent className="text-gray-600">
-                  Сервис анализирует публичные данные канала YouTube и определяет наличие 
+                  Сервис анализирует публичные данные канала YouTube через официальный API и определяет наличие 
                   признаков монетизации: рекламы, спонсорских функций и других показателей.
                 </AccordionContent>
               </AccordionItem>
 
               <AccordionItem value="item-2" className="border border-gray-200 rounded-lg px-4">
+                <AccordionTrigger className="text-left">
+                  Нужен ли API ключ для работы?
+                </AccordionTrigger>
+                <AccordionContent className="text-gray-600">
+                  Да, для работы сервиса требуется YouTube Data API ключ. Получить его можно бесплатно 
+                  в Google Cloud Console. Ключ нужно указать в переменной окружения VITE_YOUTUBE_API_KEY.
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="item-3" className="border border-gray-200 rounded-lg px-4">
                 <AccordionTrigger className="text-left">
                   Какие каналы можно проверить?
                 </AccordionTrigger>
@@ -219,23 +301,13 @@ const Index = () => {
                 </AccordionContent>
               </AccordionItem>
 
-              <AccordionItem value="item-3" className="border border-gray-200 rounded-lg px-4">
+              <AccordionItem value="item-4" className="border border-gray-200 rounded-lg px-4">
                 <AccordionTrigger className="text-left">
                   Насколько точны результаты?
                 </AccordionTrigger>
                 <AccordionContent className="text-gray-600">
-                  Точность составляет около 95%. Результаты основаны на анализе публичных 
+                  Точность составляет около 90-95%. Результаты основаны на анализе публичных 
                   данных и могут не отражать все аспекты монетизации канала.
-                </AccordionContent>
-              </AccordionItem>
-
-              <AccordionItem value="item-4" className="border border-gray-200 rounded-lg px-4">
-                <AccordionTrigger className="text-left">
-                  Бесплатно ли пользоваться сервисом?
-                </AccordionTrigger>
-                <AccordionContent className="text-gray-600">
-                  Да, базовая проверка монетизации полностью бесплатна. 
-                  Ограничений на количество проверок нет.
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
